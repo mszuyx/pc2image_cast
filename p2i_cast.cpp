@@ -20,7 +20,6 @@
 #include <pcl/filters/radius_outlier_removal.h>
 // Import eigen lib
 #include <Eigen/Dense>
-
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
 #include <image_geometry/pinhole_camera_model.h>
@@ -78,11 +77,11 @@ PointCloudToImage::PointCloudToImage():node_handle_("~"){
     ROS_INFO("in_radius_: %d", in_radius_);
 
     // Subscribe to realsense topic
-    points_sub_.subscribe(node_handle_, "/points_in", 10); //points_ground
-    image_sub_.subscribe(node_handle_, "/image_in", 5);
-    imu_node_sub_.subscribe(node_handle_, "/imu/data", 100);
+    points_sub_.subscribe(node_handle_, "/points_in", 1); //points_ground 10
+    image_sub_.subscribe(node_handle_, "/image_in", 1);    // 5
+    imu_node_sub_.subscribe(node_handle_, "/imu/data", 1); // 100
     // ApproximateTime takes a queue size as its constructor argument, hence RSSyncPolicy(xx)
-    sync.reset(new Sync(RSSyncPolicy(20), points_sub_, image_sub_, imu_node_sub_));   
+    sync.reset(new Sync(RSSyncPolicy(20), points_sub_, image_sub_, imu_node_sub_));   //20
     sync->registerCallback(boost::bind(&PointCloudToImage::projection_callback_, this, _1, _2, _3));
     
     info_sub_ = node_handle_.subscribe("/d455/color/camera_info", 1, &PointCloudToImage::infoCallback, this);
@@ -114,15 +113,20 @@ void PointCloudToImage::maskGround(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cl
     cv::Mat mask = cv::Mat::zeros(image->image.size(), image->image.type());
     
     for (unsigned int i=0; i < cloud->points.size(); i++){
-      pcl::PointXYZ pt = (*cloud)[i];
-      cv::Point3d pt_cv(pt.x, pt.y, pt.z);
-      cv::Point2d uv;
-      int radius_f = int(radius_/(pt.z));
-      if (radius_f<= 2){
-        radius_f = 2;
-      } 
-      uv = cam_model_.project3dToPixel(pt_cv);
-      cv::circle(mask, uv, radius_f, cv::Scalar(255, 255, 255), -1); //CV_RGB(0,153,255)
+      if (i % 2 == 0){
+        pcl::PointXYZ pt = (*cloud)[i];
+        cv::Point3d pt_cv(pt.x, pt.y, pt.z);
+        cv::Point2d uv;
+        
+        int radius_f = int(radius_/(0.2*(pt.z+0.0001)));
+        if (radius_f<= 2){
+          radius_f = 2;
+        } 
+        uv = cam_model_.project3dToPixel(pt_cv);
+        cv::Point2d uv_offset(radius_f,radius_f);
+        cv::rectangle(mask, uv-uv_offset, uv+uv_offset, cv::Scalar(255, 255, 255), -1); //CV_RGB(0,153,255)
+        // cv::circle(mask, uv, radius_f, cv::Scalar(255, 255, 255), -1); //CV_RGB(0,153,255)
+      }
     }
 
     image->image.copyTo(Outimage, mask);
