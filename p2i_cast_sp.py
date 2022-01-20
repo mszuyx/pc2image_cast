@@ -57,7 +57,7 @@ class MaskGroundSP:
             rot = R.from_quat([imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w]).as_euler('zyx')
             pitch = (rot[2]+1.5708) # check here
             # print(pitch*180/3.1415926)
-            rot_m = R.from_euler('zyx', [rot[0], 0, pitch]).as_matrix()
+            rot_m = R.from_euler('zyx', [rot[0], 0, pitch]).as_matrix() 
             pts = np.dot(pts,rot_m)
             radius_ = 10
             mask = np.zeros((img.shape[0],img.shape[1]), dtype=np.uint8)

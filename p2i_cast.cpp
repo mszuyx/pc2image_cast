@@ -8,23 +8,17 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
-
-#include <pcl/point_cloud.h>
+// Import PCL lib
 #include <pcl_ros/point_cloud.h>
 #include <pcl_ros/transforms.h>
-#include <pcl/filters/filter.h>
-#include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
-#include <pcl/filters/radius_outlier_removal.h>
-// Import eigen lib
+// Import Eigen lib
 #include <Eigen/Dense>
+// Import cv lib
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
 #include <image_geometry/pinhole_camera_model.h>
-#include <tf/transform_listener.h>
-#include <tf/transform_broadcaster.h>
 
 using namespace message_filters;
 using namespace Eigen;
@@ -39,23 +33,28 @@ private:
     ros::Subscriber info_sub_;
     
     // Declare ROS params
-    double unit_size_;
     int radius_;
-    double radius_search_;
-    int in_radius_;
+    bool do_subtract_;
 
     // Sync settings
     message_filters::Subscriber<sensor_msgs::PointCloud2> points_sub_;
+    message_filters::Subscriber<sensor_msgs::PointCloud2> ng_points_sub_;
     message_filters::Subscriber<sensor_msgs::Image> image_sub_;
     message_filters::Subscriber<sensor_msgs::Imu> imu_node_sub_;
+
+    typedef sync_policies::ApproximateTime<sensor_msgs::PointCloud2, sensor_msgs::PointCloud2, sensor_msgs::Image, sensor_msgs::Imu> RSSyncPolicy_sub;
+    typedef Synchronizer<RSSyncPolicy_sub> Sync_sub;
+    boost::shared_ptr<Sync_sub> sync_sub;
+
     typedef sync_policies::ApproximateTime<sensor_msgs::PointCloud2, sensor_msgs::Image, sensor_msgs::Imu> RSSyncPolicy;
     typedef Synchronizer<RSSyncPolicy> Sync;
     boost::shared_ptr<Sync> sync;
 
     // Declare functions
+    void projection_callback_sub_ (const sensor_msgs::PointCloud2ConstPtr& input_cloud, const sensor_msgs::PointCloud2ConstPtr& ng_cloud, const sensor_msgs::ImageConstPtr& input_image, const sensor_msgs::Imu::ConstPtr& imu_msg);
     void projection_callback_ (const sensor_msgs::PointCloud2ConstPtr& input_cloud, const sensor_msgs::ImageConstPtr& input_image, const sensor_msgs::Imu::ConstPtr& imu_msg);
     void infoCallback(const sensor_msgs::CameraInfoConstPtr& info_msg);
-    void maskGround(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, cv_bridge::CvImagePtr& image, cv::Mat Outimage);
+    void maskGround(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, const pcl::PointCloud<pcl::PointXYZ>::Ptr& ng_cloud, cv_bridge::CvImagePtr& image, cv::Mat Outimage);
     void quaternionToMatrixInv(double q0, double q1, double q2, double q3, Affine3d& transform);
     
     bool get_cam_info = false;
@@ -67,22 +66,26 @@ PointCloudToImage::PointCloudToImage():node_handle_("~"){
     // Init ROS related
     ROS_INFO("Inititalizing PointCloud To Image Node...");
 
-    node_handle_.param("unit_size_", unit_size_, 0.1);
-    ROS_INFO("Num of Iteration: %f", unit_size_);
     node_handle_.param("radius_", radius_, 10);
     ROS_INFO("Marker radius size: %d", radius_);
-    node_handle_.param("radius_search_", radius_search_, 0.8);
-    ROS_INFO("radius_search_: %f", radius_search_);
-    node_handle_.param("in_radius_", in_radius_, 3);
-    ROS_INFO("in_radius_: %d", in_radius_);
-
+    node_handle_.param("do_subtract_", do_subtract_, false);
+    ROS_INFO("Refine the mask using obstacle point cloud?: %d", do_subtract_);
+   
     // Subscribe to realsense topic
     points_sub_.subscribe(node_handle_, "/points_in", 1); //points_ground 10
     image_sub_.subscribe(node_handle_, "/image_in", 1);    // 5
     imu_node_sub_.subscribe(node_handle_, "/imu/data", 1); // 100
-    // ApproximateTime takes a queue size as its constructor argument, hence RSSyncPolicy(xx)
-    sync.reset(new Sync(RSSyncPolicy(20), points_sub_, image_sub_, imu_node_sub_));   //20
-    sync->registerCallback(boost::bind(&PointCloudToImage::projection_callback_, this, _1, _2, _3));
+    
+    if (do_subtract_){
+      ng_points_sub_.subscribe(node_handle_, "/ng_points_in", 1); //points_ground 10
+      // ApproximateTime takes a queue size as its constructor argument, hence RSSyncPolicy(xx)
+      sync_sub.reset(new Sync_sub(RSSyncPolicy_sub(20), points_sub_, ng_points_sub_, image_sub_, imu_node_sub_));   //20
+      sync_sub->registerCallback(boost::bind(&PointCloudToImage::projection_callback_sub_, this, _1, _2, _3, _4));
+    }else{
+      // ApproximateTime takes a queue size as its constructor argument, hence RSSyncPolicy(xx)
+      sync.reset(new Sync(RSSyncPolicy(20), points_sub_, image_sub_, imu_node_sub_));   //20
+      sync->registerCallback(boost::bind(&PointCloudToImage::projection_callback_, this, _1, _2, _3));
+    }
     
     info_sub_ = node_handle_.subscribe("/d455/color/camera_info", 1, &PointCloudToImage::infoCallback, this);
 
@@ -101,14 +104,7 @@ void PointCloudToImage::infoCallback(const sensor_msgs::CameraInfoConstPtr& info
     ROS_INFO("Got image info!");
   }
 
-void PointCloudToImage::maskGround(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, cv_bridge::CvImagePtr& image, cv::Mat Outimage){  
-    // Overlay calibration points on the image
-    //pcl::PointCloud<pcl::PointXYZ> transformed_detector_points;
-    //pcl_ros::transformPointCloud(detector_points, transformed_detector_points, transform);
-    //cv::Point2d uv;
-    //uv.x = 100;
-    //uv.y = 100;
-    //int radius = 10;
+void PointCloudToImage::maskGround(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, const pcl::PointCloud<pcl::PointXYZ>::Ptr& ng_cloud, cv_bridge::CvImagePtr& image, cv::Mat Outimage){  
     //cv::circle(image->image, uv, radius, CV_RGB(0,153,255), -1);
     cv::Mat mask = cv::Mat::zeros(image->image.size(), image->image.type());
     
@@ -119,16 +115,32 @@ void PointCloudToImage::maskGround(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cl
         cv::Point2d uv;
         
         int radius_f = int(radius_/(0.2*(pt.z+0.0001)));
-        if (radius_f<= 2){
-          radius_f = 2;
-        } 
+        radius_f = std::max(2,radius_f);
         uv = cam_model_.project3dToPixel(pt_cv);
         cv::Point2d uv_offset(radius_f,radius_f);
         cv::rectangle(mask, uv-uv_offset, uv+uv_offset, cv::Scalar(255, 255, 255), -1); //CV_RGB(0,153,255)
-        // cv::circle(mask, uv, radius_f, cv::Scalar(255, 255, 255), -1); //CV_RGB(0,153,255)
       }
     }
 
+    if(cloud->size() > 0){
+      for (unsigned int i=0; i < ng_cloud->points.size(); i++){
+        pcl::PointXYZ pt = (*ng_cloud)[i];
+        cv::Point3d pt_cv(pt.x, pt.y, pt.z);
+        cv::Point2d uv;
+
+        uv = cam_model_.project3dToPixel(pt_cv);
+        cv::Scalar color = mask.at<uchar>(uv);
+        if (color[0] == 255){
+          // std::cout << color << std::endl;
+          double dist = sqrt((pt.z*pt.z) + (pt.y*pt.y));
+          int radius_f = int((radius_)/(0.2*(dist+0.0001)));
+          radius_f = std::clamp(radius_f,5,20);
+          cv::Point2d uv_offset(radius_f,radius_f);
+          cv::rectangle(image->image, uv-uv_offset, uv+uv_offset, cv::Scalar(0, 0, 0), -1); //CV_RGB(0,153,255)
+        }
+      }
+    }
+  
     image->image.copyTo(Outimage, mask);
   }
   
@@ -146,25 +158,19 @@ void PointCloudToImage::quaternionToMatrixInv(double q0, double q1, double q2, d
     transform = AngleAxisd(-(roll+1.5708), Vector3d::UnitX()) * AngleAxisd(-pitch, Vector3d::UnitZ()); 
 }
 
-void PointCloudToImage::projection_callback_ (const sensor_msgs::PointCloud2ConstPtr& input_cloud, const sensor_msgs::ImageConstPtr& input_image, const sensor_msgs::Imu::ConstPtr& imu_msg){
+void PointCloudToImage::projection_callback_sub_ (const sensor_msgs::PointCloud2ConstPtr& input_cloud, const sensor_msgs::PointCloud2ConstPtr& ng_cloud, const sensor_msgs::ImageConstPtr& input_image, const sensor_msgs::Imu::ConstPtr& imu_msg){
     //ROS_INFO("callback"); 
     // Convert pc to pcl::PointXYZ
     pcl::PCLPointCloud2::Ptr input_cloud_pcl (new pcl::PCLPointCloud2 ());
     pcl_conversions::toPCL(*input_cloud, *input_cloud_pcl);
-     
-    // Apply voxel filter
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_raw (new pcl::PointCloud<pcl::PointXYZ> ());
-    if (unit_size_>0){
-      pcl::PCLPointCloud2::Ptr cloud_filtered (new pcl::PCLPointCloud2 ());
-      pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
-      sor.setInputCloud (input_cloud_pcl);
-      sor.setLeafSize (float (unit_size_),float (unit_size_),float (unit_size_));
-      sor.filter (*cloud_filtered);
-      pcl::fromPCLPointCloud2(*cloud_filtered, *cloud_raw);
-    }else{
-      pcl::fromPCLPointCloud2(*input_cloud_pcl, *cloud_raw);
-    }
+    pcl::fromPCLPointCloud2(*input_cloud_pcl, *cloud_raw);
 
+    pcl::PCLPointCloud2::Ptr ng_cloud_pcl (new pcl::PCLPointCloud2 ());
+    pcl_conversions::toPCL(*ng_cloud, *ng_cloud_pcl);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr ng_cloud_raw (new pcl::PointCloud<pcl::PointXYZ> ());
+    pcl::fromPCLPointCloud2(*ng_cloud_pcl, *ng_cloud_raw);
+    
     // Invert pointcloud back to original attitude
     double q0_in, q1_in, q2_in, q3_in; 
     q0_in=imu_msg->orientation.w;
@@ -173,8 +179,10 @@ void PointCloudToImage::projection_callback_ (const sensor_msgs::PointCloud2Cons
     q3_in=imu_msg->orientation.z;
     Affine3d transform;
     quaternionToMatrixInv(q0_in, q1_in, q2_in, q3_in, transform);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ> ());
-    pcl::transformPointCloud (*cloud_raw, *cloud, transform);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ> ()); 
+    pcl::transformPointCloud (*cloud_raw, *cloud_raw, transform);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ng (new pcl::PointCloud<pcl::PointXYZ> ());
+    pcl::transformPointCloud (*ng_cloud_raw, *ng_cloud_raw, transform);
 
     try{
       image_bridge_ = cv_bridge::toCvCopy(input_image, "bgr8");
@@ -185,21 +193,44 @@ void PointCloudToImage::projection_callback_ (const sensor_msgs::PointCloud2Cons
       return;
     }
     cv::Mat OutImage = cv::Mat::zeros(image_bridge_->image.size(), image_bridge_->image.type());
-
-    if (in_radius_>0){
-      pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_cleaned (new pcl::PointCloud<pcl::PointXYZ> ());
-      pcl::RadiusOutlierRemoval<pcl::PointXYZ> outrem;
-      outrem.setInputCloud(cloud);
-      outrem.setRadiusSearch(radius_search_);
-      outrem.setMinNeighborsInRadius (in_radius_);
-      outrem.setKeepOrganized(true);
-      outrem.filter (*cloud_cleaned);
-
-      maskGround(cloud_cleaned, image_bridge_, OutImage);
-    }else{
-      maskGround(cloud, image_bridge_, OutImage);
-    }
+    maskGround(cloud_raw, ng_cloud_raw, image_bridge_, OutImage);
+    image_bridge_->image = OutImage;
     
+    // publish output image
+    image_pub_.publish(image_bridge_->toImageMsg());
+}
+
+void PointCloudToImage::projection_callback_ (const sensor_msgs::PointCloud2ConstPtr& input_cloud, const sensor_msgs::ImageConstPtr& input_image, const sensor_msgs::Imu::ConstPtr& imu_msg){
+    //ROS_INFO("callback"); 
+    // Convert pc to pcl::PointXYZ
+    pcl::PCLPointCloud2::Ptr input_cloud_pcl (new pcl::PCLPointCloud2 ());
+    pcl_conversions::toPCL(*input_cloud, *input_cloud_pcl);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_raw (new pcl::PointCloud<pcl::PointXYZ> ());
+    pcl::fromPCLPointCloud2(*input_cloud_pcl, *cloud_raw);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr ng_cloud_raw (new pcl::PointCloud<pcl::PointXYZ> ());
+
+    // Invert pointcloud back to original attitude
+    double q0_in, q1_in, q2_in, q3_in; 
+    q0_in=imu_msg->orientation.w;
+    q1_in=imu_msg->orientation.x;
+    q2_in=imu_msg->orientation.y;
+    q3_in=imu_msg->orientation.z;
+    Affine3d transform;
+    quaternionToMatrixInv(q0_in, q1_in, q2_in, q3_in, transform);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ> ()); 
+    pcl::transformPointCloud (*cloud_raw, *cloud_raw, transform);
+
+    try{
+      image_bridge_ = cv_bridge::toCvCopy(input_image, "bgr8");
+    }
+    catch (cv_bridge::Exception& ex)
+    {
+      ROS_ERROR("Failed to convert image");
+      return;
+    }
+    cv::Mat OutImage = cv::Mat::zeros(image_bridge_->image.size(), image_bridge_->image.type());
+    maskGround(cloud_raw, ng_cloud_raw, image_bridge_, OutImage);
     image_bridge_->image = OutImage;
     
     // publish output image
@@ -208,9 +239,9 @@ void PointCloudToImage::projection_callback_ (const sensor_msgs::PointCloud2Cons
 
 int main (int argc, char** argv) {
     ros::init(argc, argv, "PointCloudToImage");
-    
     PointCloudToImage node;
-    
-    ros::spin();
+    ros::MultiThreadedSpinner spinner(4); // Use 4 threads
+    spinner.spin();
+    // ros::spin();
     return 0;
  }

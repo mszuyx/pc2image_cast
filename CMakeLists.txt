@@ -3,6 +3,8 @@ project(p2i_cast)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
+  rospy
+  ros_numpy
   std_msgs
   pcl_ros
   pcl_conversions
@@ -29,8 +31,8 @@ include_directories(
 find_package(Eigen3 REQUIRED)
 
 #SET(CMAKE_CXX_FLAGS "-std=c++11 -O2 -g -Wall ${CMAKE_CXX_FLAGS}")
-SET(CMAKE_CXX_FLAGS "-std=c++11 -O2 -g -Wall ${CMAKE_CXX_FLAGS}")
-SET(CMAKE_CXX_STANDARD 14)
+SET(CMAKE_CXX_FLAGS "-std=c++17 -O2 -g -Wall ${CMAKE_CXX_FLAGS}")
+SET(CMAKE_CXX_STANDARD 17) #14
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 #Ground Plane Fitter
@@ -38,6 +40,10 @@ find_package(PCL REQUIRED)
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
+
+catkin_install_python(PROGRAMS p2i_cast_sp.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 add_executable(p2i_cast p2i_cast.cpp)
 
