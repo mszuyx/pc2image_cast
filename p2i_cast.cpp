@@ -240,8 +240,8 @@ void PointCloudToImage::projection_callback_ (const sensor_msgs::PointCloud2Cons
 int main (int argc, char** argv) {
     ros::init(argc, argv, "PointCloudToImage");
     PointCloudToImage node;
-    ros::MultiThreadedSpinner spinner(4); // Use 4 threads
-    spinner.spin();
-    // ros::spin();
+    // ros::MultiThreadedSpinner spinner(4); // Use 4 threads
+    // spinner.spin();
+    ros::spin();
     return 0;
  }
