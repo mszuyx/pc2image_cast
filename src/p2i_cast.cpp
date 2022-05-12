@@ -87,7 +87,7 @@ PointCloudToImage::PointCloudToImage():node_handle_("~"){
       sync->registerCallback(boost::bind(&PointCloudToImage::projection_callback_, this, _1, _2, _3));
     }
     
-    info_sub_ = node_handle_.subscribe("/d455/color/camera_info", 1, &PointCloudToImage::infoCallback, this);
+    info_sub_ = node_handle_.subscribe("/camera_info", 1, &PointCloudToImage::infoCallback, this);
 
     // Publish Init
     std::string image_topic;
@@ -155,7 +155,7 @@ void PointCloudToImage::quaternionToMatrixInv(double q0, double q1, double q2, d
     double pitch = std::asin(t2);
     
     // axis defined in camera_depth_optical_frame
-    transform = AngleAxisd(-(roll+1.5708), Vector3d::UnitX()) * AngleAxisd(-pitch, Vector3d::UnitZ()); 
+    transform = AngleAxisd(-pitch, Vector3d::UnitZ()) * AngleAxisd(-(roll+1.5708), Vector3d::UnitX());  // Choose wisely to prevent gimbal local
 }
 
 void PointCloudToImage::projection_callback_sub_ (const sensor_msgs::PointCloud2ConstPtr& input_cloud, const sensor_msgs::PointCloud2ConstPtr& ng_cloud, const sensor_msgs::ImageConstPtr& input_image, const sensor_msgs::Imu::ConstPtr& imu_msg){

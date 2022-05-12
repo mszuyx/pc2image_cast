@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   ros_numpy
   std_msgs
+  sensor_msgs
   pcl_ros
   pcl_conversions
   cv_bridge
@@ -14,6 +15,18 @@ find_package(catkin REQUIRED COMPONENTS
   image_view
   OpenCV
   tf
+  realsense2_camera
+  pc_gps
+)
+
+add_message_files(
+  FILES
+  homoMatrix.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
 )
 
 catkin_package(CATKIN_DEPENDS
@@ -50,7 +63,7 @@ catkin_install_python(PROGRAMS src/p2i_cast_sp.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-add_executable(p2i_cast src/p2i_cast.cpp)
+add_executable(p2i_cast src/p2i_cast_ver3.cpp)
 
 target_include_directories(p2i_cast PRIVATE
 	${PCL_INCLUDE_DIRS}
